@@ -1,0 +1,12 @@
+.env
+docker/.env
+*.log
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
+backups/
+.DS_Store
+__pycache__/
+scripts/seed/product_images/

@@ -1,0 +1,143 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: uniclothes-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-uniclothes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-uniclothes_dev_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-uniclothes}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ../scripts/sql:/sql:ro
+      - ../scripts/seed:/seed:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-uniclothes} -d ${POSTGRES_DB:-uniclothes}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - uniclothes-net
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: uniclothes-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-uniclothes}:${POSTGRES_PASSWORD:-uniclothes_dev_2026}@postgres:5432/${POSTGRES_DB:-uniclothes}?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - uniclothes-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: uniclothes-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-uniclothes_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-uniclothes_minio_2026}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - uniclothes-net
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: uniclothes-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing local/product-images;
+      mc anonymous set download local/product-images;
+      echo 'MinIO bucket product-images ready';
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-uniclothes_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-uniclothes_minio_2026}
+    networks:
+      - uniclothes-net
+
+  streamlit:
+    build:
+      context: ../streamlit
+      dockerfile: Dockerfile
+    container_name: uniclothes-streamlit
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-uniclothes}:${POSTGRES_PASSWORD:-uniclothes_dev_2026}@postgres:5432/${POSTGRES_DB:-uniclothes}"
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_PUBLIC_URL: "http://localhost:9000"
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - ../streamlit:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - uniclothes-net
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: uniclothes-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - postgres-exporter
+    networks:
+      - uniclothes-net
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: uniclothes-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-uniclothes_grafana}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - uniclothes-net
+
+volumes:
+  postgres_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  uniclothes-net:
+    driver: bridge
