@@ -1,4 +1,4 @@
-# UNICLOTHES — Architecture de donnees
+# UNICLOTHES - Architecture de donnees
 
 ## Demarrage
 
